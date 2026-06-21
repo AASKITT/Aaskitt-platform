@@ -3,15 +3,28 @@ const router = express.Router();
 const Notification = require('../models/Notification');
 const User = require('../models/User');
 
-// GET /api/notifications/:anonymousId
-router.get('/:anonymousId', async (req, res) => {
+// ⚠️ IMPORTANT: Specific routes MUST come before /:param routes to avoid conflicts
+
+// POST /api/notifications/push-token  (must be before /:anonymousId)
+router.post('/push-token', async (req, res) => {
+  const { anonymousId, pushToken } = req.body;
+  if (!anonymousId || !pushToken) {
+    return res.status(400).json({ error: 'Missing anonymousId or pushToken' });
+  }
+
   try {
-    const notifications = await Notification.find({ recipientId: req.params.anonymousId })
-      .sort({ createdAt: -1 })
-      .limit(50);
-    res.json(notifications);
+    const result = await User.findOneAndUpdate(
+      { anonymousId },
+      { $set: { pushToken } },
+      { new: true }
+    );
+    if (!result) {
+      // User not registered yet — silently ignore (they haven't set a nickname)
+      return res.json({ success: false, message: 'User not found' });
+    }
+    res.json({ success: true });
   } catch (err) {
-    console.error('Error fetching notifications:', err);
+    console.error('Error saving push token:', err);
     res.status(500).json({ error: 'Server error' });
   }
 });
@@ -41,22 +54,15 @@ router.put('/:anonymousId/read', async (req, res) => {
   }
 });
 
-// POST /api/notifications/push-token
-router.post('/push-token', async (req, res) => {
-  const { anonymousId, pushToken } = req.body;
-  if (!anonymousId || !pushToken) {
-    return res.status(400).json({ error: 'Missing anonymousId or pushToken' });
-  }
-
+// GET /api/notifications/:anonymousId  (keep last — most generic)
+router.get('/:anonymousId', async (req, res) => {
   try {
-    await User.findOneAndUpdate(
-      { anonymousId },
-      { $set: { pushToken } },
-      { new: true, upsert: true } // upsert if user doesn't exist yet? Better to just update if exists.
-    );
-    res.json({ success: true });
+    const notifications = await Notification.find({ recipientId: req.params.anonymousId })
+      .sort({ createdAt: -1 })
+      .limit(50);
+    res.json(notifications);
   } catch (err) {
-    console.error('Error saving push token:', err);
+    console.error('Error fetching notifications:', err);
     res.status(500).json({ error: 'Server error' });
   }
 });

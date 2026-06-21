@@ -24,8 +24,72 @@ router.post('/', async (req, res) => {
 
     await post.save();
     
-    // Emit socket event (we will attach io to req in server.js)
+    // Emit socket event to all clients
     req.io.emit('postAdded', post);
+    // Emit dedicated event so clients can update notification badge in real-time
+    req.io.emit('newPostNotification', { postId: post._id, senderNickname: nickname });
+
+    // Fire-and-forget: save in-app notifications + send push to all other users
+    // We do NOT detach this entirely to prevent serverless environments from killing it prematurely
+    try {
+      const Notification = require('../models/Notification');
+      const User = require('../models/User');
+
+      // Get all users except the poster
+      const allUsers = await User.find({ anonymousId: { $ne: anonymousId }, role: 'user' });
+
+      const truncatedContent = content.length > 60 ? content.substring(0, 60) + '...' : content;
+      const pushTitle = `${nickname || 'Someone'} created a new post`;
+      const pushBody = truncatedContent;
+
+      const pushPromises = [];
+
+      for (const user of allUsers) {
+        // Save in-app notification for each user
+        try {
+          const notif = new Notification({
+            recipientId: user.anonymousId,
+            senderNickname: nickname || 'Anonymous',
+            type: 'post_created',
+            postId: post._id,
+          });
+          await notif.save();
+          
+          const unreadCount = await Notification.countDocuments({ recipientId: user.anonymousId, isRead: false });
+
+          // Queue push if they have a token
+          if (user.pushToken) {
+            const pushPromise = fetch('https://exp.host/--/api/v2/push/send', {
+              method: 'POST',
+              headers: {
+                'Accept': 'application/json',
+                'Accept-encoding': 'gzip, deflate',
+                'Content-Type': 'application/json',
+              },
+              body: JSON.stringify({
+                to: user.pushToken,
+                sound: 'default',
+                priority: 'high',
+                channelId: 'default',
+                badge: unreadCount,
+                title: pushTitle,
+                body: pushBody,
+                data: { postId: post._id.toString(), type: 'post_created' },
+              }),
+            }).catch(err => console.error('Push error:', err));
+            
+            pushPromises.push(pushPromise);
+          }
+        } catch (e) {
+          // skip individual failures silently
+        }
+      }
+
+      // Wait for all push notifications to be sent
+      await Promise.all(pushPromises);
+    } catch (notifErr) {
+      console.error('Error sending new post notifications:', notifErr);
+    }
 
     res.status(201).json(post);
   } catch (err) {
@@ -38,23 +102,10 @@ router.post('/', async (req, res) => {
 router.get('/nearby', async (req, res) => {
   try {
     const { lat, lng } = req.query;
-    let posts;
-
-    if (lat && lng) {
-      posts = await Post.find({
-        status: { $in: ['active', 'reported'] },
-        location: {
-          $near: {
-            $geometry: {
-              type: 'Point',
-              coordinates: [parseFloat(lng), parseFloat(lat)]
-            }
-          }
-        }
-      }).limit(50);
-    } else {
-      posts = await Post.find({ status: { $in: ['active', 'reported'] } }).sort({ createdAt: -1 }).limit(50);
-    }
+    // Simply fetch the 50 latest posts globally, sorted by newest first
+    const posts = await Post.find({ status: { $in: ['active', 'reported'] } })
+      .sort({ createdAt: -1 })
+      .limit(50);
 
     res.json(posts);
   } catch (err) {
@@ -148,6 +199,8 @@ router.post('/:id/comments', async (req, res) => {
         });
         await notification.save();
 
+        const unreadCount = await Notification.countDocuments({ recipientId, isRead: false });
+
         // Send Push Notification
         const recipient = await User.findOne({ anonymousId: recipientId });
         if (recipient && recipient.pushToken) {
@@ -161,8 +214,11 @@ router.post('/:id/comments', async (req, res) => {
             body: JSON.stringify({
               to: recipient.pushToken,
               sound: 'default',
+              priority: 'high',
+              channelId: 'default',
+              badge: unreadCount,
               title: 'Aaskitt Notification',
-              body: type === 'reply' ? `${nickname} replied to your comment!` : `${nickname} commented on your post!`,
+              body: type === 'reply' ? `${nickname} replied: "${text}"` : `${nickname} commented: "${text}"`,
               data: { postId: post._id },
             }),
           }).catch(err => console.error('Push notification error:', err));

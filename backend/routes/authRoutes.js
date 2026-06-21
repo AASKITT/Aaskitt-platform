@@ -14,9 +14,16 @@ router.post('/anonymous', async (req, res) => {
 
     let user = await User.findOne({ anonymousId });
     if (user) {
-      user.lastActive = Date.now();
-      await user.save();
-      return res.json({ nickname: user.nickname, anonymousId: user.anonymousId });
+      if (!user.nickname) {
+        user.nickname = await generateUniqueNickname(requestedNickname);
+        user.lastActive = Date.now();
+        await user.save();
+        return res.status(201).json({ nickname: user.nickname, anonymousId: user.anonymousId });
+      } else {
+        user.lastActive = Date.now();
+        await user.save();
+        return res.json({ nickname: user.nickname, anonymousId: user.anonymousId });
+      }
     }
 
     const nickname = await generateUniqueNickname(requestedNickname);
