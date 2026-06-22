@@ -13,6 +13,7 @@ export default function Sidebar({ isOpen, setIsOpen }) {
     { name: 'Dashboard', path: '/admin/dashboard', icon: LayoutDashboard },
     { name: 'Users', path: '/admin/users', icon: Users },
     { name: 'Posts', path: '/admin/posts', icon: MessageSquare },
+    { name: 'Settings', path: '/admin/settings', icon: LayoutDashboard },
   ];
 
   return (

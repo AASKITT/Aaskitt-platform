@@ -4,6 +4,7 @@ import Login from './pages/Login';
 import Dashboard from './pages/Dashboard';
 import Users from './pages/Users';
 import Posts from './pages/Posts';
+import Settings from './pages/Settings';
 
 function App() {
   const PrivateRoute = ({ children }) => {
@@ -25,6 +26,7 @@ function App() {
           <Route path="dashboard" element={<Dashboard />} />
           <Route path="users" element={<Users />} />
           <Route path="posts" element={<Posts />} />
+          <Route path="settings" element={<Settings />} />
         </Route>
       </Routes>
     </Router>

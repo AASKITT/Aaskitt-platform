@@ -98,12 +98,25 @@ router.post('/', async (req, res) => {
   }
 });
 
-// GET /api/posts/nearby
+// GET /api/posts/nearby (Main Feed)
 router.get('/nearby', async (req, res) => {
   try {
-    const { lat, lng } = req.query;
-    // Simply fetch the 50 latest posts globally, sorted by newest first
-    const posts = await Post.find({ status: { $in: ['active', 'reported'] } })
+    const { lat, lng, category } = req.query;
+    
+    let query = { status: { $in: ['active', 'reported'] } };
+
+    if (category) {
+      if (category === 'rooms') {
+        query.content = { $regex: /room|pg|flat|rent|roommate|partner/i };
+      } else if (category === 'buy_sell') {
+        query.content = { $regex: /buy|sell|sale|price|bechna|kharidna/i };
+      } else if (category === 'jobs') {
+        query.content = { $regex: /job|hiring|part time|work|vacancy/i };
+      }
+    }
+
+    // Fetch the 50 latest posts globally, filtered by category, sorted by newest first
+    const posts = await Post.find(query)
       .sort({ createdAt: -1 })
       .limit(50);
 

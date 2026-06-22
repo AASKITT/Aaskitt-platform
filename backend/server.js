@@ -9,6 +9,7 @@ const authRoutes = require('./routes/authRoutes');
 const postRoutes = require('./routes/postRoutes');
 const adminRoutes = require('./routes/adminRoutes');
 const notificationRoutes = require('./routes/notificationRoutes');
+const configRoutes = require('./routes/configRoutes');
 
 const app = express();
 const server = http.createServer(app);
@@ -22,10 +23,9 @@ const allowedOrigins = [
 
 const corsOptions = {
   origin: (origin, callback) => {
-    // Allow requests with no origin (mobile apps, Postman, server-to-server)
     if (!origin) return callback(null, true);
     if (allowedOrigins.includes(origin)) return callback(null, true);
-    callback(null, true); // Allow all in production for now (mobile has no fixed origin)
+    callback(null, true);
   },
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization'],
@@ -42,20 +42,18 @@ const io = new Server(server, {
 app.use(cors(corsOptions));
 app.use(express.json({ limit: '10mb' }));
 
-// Health check endpoint
 app.get('/health', (req, res) => res.json({ status: 'ok', timestamp: new Date().toISOString() }));
 
-// Inject io into req
 app.use((req, res, next) => {
   req.io = io;
   next();
 });
 
-// Routes
 app.use('/api/auth', authRoutes);
 app.use('/api/posts', postRoutes);
 app.use('/api/admin', adminRoutes);
 app.use('/api/notifications', notificationRoutes);
+app.use('/api/config', configRoutes);
 
 // Global 404 handler
 app.use((req, res) => {

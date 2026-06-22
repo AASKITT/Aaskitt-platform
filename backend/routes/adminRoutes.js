@@ -151,4 +151,23 @@ router.delete('/users/:id', [auth, admin], async (req, res) => {
   }
 });
 
+// PUT /api/admin/config
+router.put('/config', [auth, admin], async (req, res) => {
+  try {
+    const AppConfig = require('../models/AppConfig');
+    let config = await AppConfig.findOne();
+    if (!config) {
+      config = new AppConfig();
+    }
+    
+    if (req.body.minRequiredVersion) config.minRequiredVersion = req.body.minRequiredVersion;
+    if (req.body.playStoreUrl) config.playStoreUrl = req.body.playStoreUrl;
+
+    await config.save();
+    res.json(config);
+  } catch (err) {
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
 module.exports = router;
