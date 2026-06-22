@@ -107,11 +107,11 @@ router.get('/nearby', async (req, res) => {
 
     if (category) {
       if (category === 'rooms') {
-        query.content = { $regex: /room|pg|flat|rent|roommate|partner/i };
+        query.content = { $regex: /room|pg|1bhk|2bhk|rent|roommate|vacancy/i };
       } else if (category === 'buy_sell') {
         query.content = { $regex: /buy|sell|sale|price|bechna|kharidna/i };
       } else if (category === 'jobs') {
-        query.content = { $regex: /job|hiring|part time|work|vacancy/i };
+        query.content = { $regex: /job|hiring|part time|work|home tuition/i };
       }
     }
 
