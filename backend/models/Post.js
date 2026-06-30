@@ -11,6 +11,7 @@ const postSchema = new mongoose.Schema({
   views:         { type: Number, default: 0 },
   commentsCount: { type: Number, default: 0 },
   status:        { type: String, enum: ['active', 'deleted', 'reported'], default: 'active' },
+  locationName:  { type: String, default: '' },
   createdAt:     { type: Date, default: Date.now }
 });
 

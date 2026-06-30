@@ -6,7 +6,7 @@ const Comment = require('../models/Comment');
 // POST /api/posts
 router.post('/', async (req, res) => {
   try {
-    const { anonymousId, nickname, content, latitude, longitude } = req.body;
+    const { anonymousId, nickname, content, latitude, longitude, locationName } = req.body;
     
     if (!content || latitude == null || longitude == null) {
       return res.status(400).json({ error: 'Missing required fields' });
@@ -16,6 +16,7 @@ router.post('/', async (req, res) => {
       anonymousId,
       nickname,
       content,
+      locationName: locationName || '',
       location: {
         type: 'Point',
         coordinates: [longitude, latitude] // GeoJSON is [lng, lat]
@@ -101,13 +102,29 @@ router.post('/', async (req, res) => {
 // GET /api/posts/nearby (Main Feed)
 router.get('/nearby', async (req, res) => {
   try {
-    const { lat, lng, category } = req.query;
+    const { lat, lng, category, subCategory } = req.query;
     
     let query = { status: { $in: ['active', 'reported'] } };
 
     if (category) {
       if (category === 'rooms') {
-        query.content = { $regex: /room|pg|1bhk|2bhk|rent|roommate|vacancy/i };
+        if (subCategory === 'male') {
+          // \b ensures it matches "male" but not "female". Negative lookbehind (?<!fe) is not fully supported in all Mongo versions, so \b is safer.
+          query.content = { $regex: /\b(male|bachelor|bachelors|boys|gents|men)\b/i };
+        } else if (subCategory === 'female') {
+          query.content = { $regex: /\b(female|girls|ladies|women)\b/i };
+        } else if (subCategory === 'penthouse') {
+          query.content = { $regex: /\b(penthouse|pent house|pent-house)\b/i };
+        } else if (subCategory === 'family') {
+          query.content = { $regex: /\b(family|couple|married)\b/i };
+        } else if (subCategory === '1bhk') {
+          query.content = { $regex: /\b(1\s?bhk|one bhk)\b/i };
+        } else if (subCategory === '2bhk') {
+          query.content = { $regex: /\b(2\s?bhk|two bhk)\b/i };
+        } else {
+          // All rooms
+          query.content = { $regex: /\b(room|pg|1bhk|2bhk|rent|roommate|vacancy|male|female|family|penthouse)\b/i };
+        }
       } else if (category === 'buy_sell') {
         query.content = { $regex: /buy|sell|sale|price|bechna|kharidna/i };
       } else if (category === 'jobs') {

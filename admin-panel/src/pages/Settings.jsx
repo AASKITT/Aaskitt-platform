@@ -84,12 +84,12 @@ export default function Settings() {
             </label>
             <input
               type="text"
-              value={playStoreUrl || 'https://play.google.com/store/apps/details?id=com.aaskitt.original'}
-              readOnly
-              disabled
-              className="w-full px-4 py-2 bg-slate-100 border border-slate-200 text-slate-500 rounded-lg cursor-not-allowed"
+              value={playStoreUrl}
+              onChange={(e) => setPlayStoreUrl(e.target.value)}
+              placeholder="e.g. market://details?id=com.aaskitt.original"
+              className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-slate-800"
             />
-            <p className="text-xs text-slate-400 mt-1">This link is permanently set to your app's Play Store page.</p>
+            <p className="text-xs text-slate-400 mt-1">This link is where users will be sent to update the app.</p>
           </div>
 
           <button
