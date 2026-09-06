@@ -30,44 +30,38 @@ router.post('/', async (req, res) => {
     // Emit dedicated event so clients can update notification badge in real-time
     req.io.emit('newPostNotification', { postId: post._id, senderNickname: nickname });
 
+    res.status(201).json(post);
+
     // Fire-and-forget: save in-app notifications + send push to all other users
-    // We do NOT detach this entirely to prevent serverless environments from killing it prematurely
-    try {
-      const Notification = require('../models/Notification');
-      const User = require('../models/User');
+    // Run asynchronously to not block the request
+    (async () => {
+      try {
+        const Notification = require('../models/Notification');
+        const User = require('../models/User');
 
-      // Get all users except the poster
-      const allUsers = await User.find({ anonymousId: { $ne: anonymousId }, role: 'user' });
+        // Get all users except the poster
+        const allUsers = await User.find({ anonymousId: { $ne: anonymousId }, role: 'user' });
 
-      const truncatedContent = content.length > 60 ? content.substring(0, 60) + '...' : content;
-      const pushTitle = `${nickname || 'Someone'} created a new post`;
-      const pushBody = truncatedContent;
+        const truncatedContent = content.length > 60 ? content.substring(0, 60) + '...' : content;
+        const pushTitle = `${nickname || 'Someone'} created a new post`;
+        const pushBody = truncatedContent;
 
-      const pushPromises = [];
+        const messages = [];
 
-      for (const user of allUsers) {
-        // Save in-app notification for each user
-        try {
-          const notif = new Notification({
-            recipientId: user.anonymousId,
-            senderNickname: nickname || 'Anonymous',
-            type: 'post_created',
-            postId: post._id,
-          });
-          await notif.save();
-          
-          const unreadCount = await Notification.countDocuments({ recipientId: user.anonymousId, isRead: false });
-
-          // Queue push if they have a token
-          if (user.pushToken) {
-            const pushPromise = fetch('https://exp.host/--/api/v2/push/send', {
-              method: 'POST',
-              headers: {
-                'Accept': 'application/json',
-                'Accept-encoding': 'gzip, deflate',
-                'Content-Type': 'application/json',
-              },
-              body: JSON.stringify({
+        // Save notifications and prepare push messages concurrently
+        await Promise.all(allUsers.map(async (user) => {
+          try {
+            const notif = new Notification({
+              recipientId: user.anonymousId,
+              senderNickname: nickname || 'Anonymous',
+              type: 'post_created',
+              postId: post._id,
+            });
+            await notif.save();
+            
+            if (user.pushToken) {
+              const unreadCount = await Notification.countDocuments({ recipientId: user.anonymousId, isRead: false });
+              messages.push({
                 to: user.pushToken,
                 sound: 'default',
                 priority: 'high',
@@ -76,23 +70,35 @@ router.post('/', async (req, res) => {
                 title: pushTitle,
                 body: pushBody,
                 data: { postId: post._id.toString(), type: 'post_created' },
-              }),
-            }).catch(err => console.error('Push error:', err));
-            
-            pushPromises.push(pushPromise);
+              });
+            }
+          } catch (e) {
+            // skip individual failures silently
           }
-        } catch (e) {
-          // skip individual failures silently
+        }));
+
+        // Send push notifications in batches (Expo allows up to 100 per request)
+        const chunks = [];
+        for (let i = 0; i < messages.length; i += 100) {
+          chunks.push(messages.slice(i, i + 100));
         }
+
+        for (const chunk of chunks) {
+          fetch('https://exp.host/--/api/v2/push/send', {
+            method: 'POST',
+            headers: {
+              'Accept': 'application/json',
+              'Accept-encoding': 'gzip, deflate',
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify(chunk),
+          }).catch(err => console.error('Push error:', err));
+        }
+      } catch (notifErr) {
+        console.error('Error sending new post notifications:', notifErr);
       }
+    })();
 
-      // Wait for all push notifications to be sent
-      await Promise.all(pushPromises);
-    } catch (notifErr) {
-      console.error('Error sending new post notifications:', notifErr);
-    }
-
-    res.status(201).json(post);
   } catch (err) {
     console.error('Error creating post:', err);
     res.status(500).json({ error: 'Server error' });
@@ -160,6 +166,29 @@ router.get('/:id', async (req, res) => {
   try {
     const post = await Post.findById(req.params.id);
     if (!post) return res.status(404).json({ error: 'Post not found' });
+    res.json(post);
+  } catch (err) {
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// PUT /api/posts/:id/edit
+router.put('/:id/edit', async (req, res) => {
+  try {
+    const { anonymousId, content } = req.body;
+    if (!content || !content.trim()) {
+      return res.status(400).json({ error: 'Content cannot be empty.' });
+    }
+    const post = await Post.findById(req.params.id);
+    if (!post) return res.status(404).json({ error: 'Post not found' });
+    if (post.anonymousId !== anonymousId) {
+      return res.status(403).json({ error: 'Not authorized' });
+    }
+    post.content = content.trim();
+    post.editedAt = new Date();
+    await post.save();
+    // Emit real-time update so other clients update instantly
+    req.io.emit('postEdited', { postId: post._id, content: post.content, editedAt: post.editedAt });
     res.json(post);
   } catch (err) {
     res.status(500).json({ error: 'Server error' });
@@ -299,6 +328,8 @@ router.delete('/:id', async (req, res) => {
 
     await Post.findByIdAndDelete(req.params.id);
     await Comment.deleteMany({ post: req.params.id });
+    const Notification = require('../models/Notification');
+    await Notification.deleteMany({ postId: req.params.id });
 
     req.io.emit('postDeleted', req.params.id);
     res.json({ success: true });

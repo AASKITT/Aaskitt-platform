@@ -5,6 +5,8 @@ const bcrypt = require('bcryptjs');
 const User = require('../models/User');
 const Post = require('../models/Post');
 const Comment = require('../models/Comment');
+const Group = require('../models/Group');
+const CommunityMessage = require('../models/CommunityMessage');
 const auth = require('../middleware/auth');
 const admin = require('../middleware/admin');
 
@@ -147,6 +149,201 @@ router.delete('/users/:id', [auth, admin], async (req, res) => {
     
     res.json({ success: true });
   } catch (err) {
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// GET /api/admin/groups
+router.get('/groups', [auth, admin], async (req, res) => {
+  try {
+    const groups = await Group.find().sort({ createdAt: -1 }).limit(100);
+    res.json(groups);
+  } catch (err) {
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// DELETE /api/admin/groups/:id
+router.delete('/groups/:id', [auth, admin], async (req, res) => {
+  try {
+    await Group.findByIdAndDelete(req.params.id);
+    await CommunityMessage.deleteMany({ groupId: req.params.id });
+    if (req.io) {
+      req.io.emit('groupDeleted', { groupId: req.params.id });
+    }
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+// GET /api/admin/groups/:id
+router.get('/groups/:id', [auth, admin], async (req, res) => {
+  try {
+    const group = await Group.findById(req.params.id);
+    if (!group) return res.status(404).json({ error: 'Group not found' });
+    const messages = await CommunityMessage.find({ groupId: req.params.id }).sort({ createdAt: -1 });
+    res.json({ group, messages });
+  } catch (err) {
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// PUT /api/admin/groups/:id — super admin edits group details
+router.put('/groups/:id', [auth, admin], async (req, res) => {
+  try {
+    const { name, rules, tags, dp } = req.body;
+    const group = await Group.findById(req.params.id);
+    if (!group) return res.status(404).json({ error: 'Group not found' });
+
+    if (name !== undefined && name.trim()) group.name = name.trim();
+    if (rules !== undefined) group.rules = rules.trim();
+    if (tags !== undefined) group.tags = Array.isArray(tags) ? tags : [];
+    if (dp !== undefined) group.dp = dp || null;
+
+    await group.save();
+    if (req.io) {
+      req.io.emit('groupUpdated', { group });
+    }
+    res.json({ success: true, group });
+  } catch (err) {
+    console.error('Admin group update error:', err);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// DELETE /api/admin/groups/:groupId/members/:userId
+router.delete('/groups/:groupId/members/:userId', [auth, admin], async (req, res) => {
+  try {
+    const group = await Group.findById(req.params.groupId);
+    if (!group) return res.status(404).json({ error: 'Group not found' });
+
+    group.members = group.members.filter(m => m.anonymousId !== req.params.userId);
+    await group.save();
+    res.json({ success: true, group });
+  } catch (err) {
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// DELETE /api/admin/groups/:groupId/messages/:msgId
+router.delete('/groups/:groupId/messages/:msgId', [auth, admin], async (req, res) => {
+  try {
+    await CommunityMessage.findByIdAndDelete(req.params.msgId);
+    if (req.io) {
+      req.io.emit('communityMessageDeleted', { groupId: req.params.groupId, msgId: req.params.msgId });
+    }
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// POST /api/admin/groups/:groupId/broadcast — admin sends message as "Team Aaskitt"
+router.post('/groups/:groupId/broadcast', [auth, admin], async (req, res) => {
+  try {
+    const { text } = req.body;
+    if (!text?.trim()) return res.status(400).json({ error: 'Message text required' });
+
+    const group = await Group.findById(req.params.groupId);
+    if (!group) return res.status(404).json({ error: 'Group not found' });
+
+    const msg = new CommunityMessage({
+      groupId: req.params.groupId,
+      anonymousId: 'team_aaskitt',
+      nickname: 'Team Aaskitt',
+      text: text.trim(),
+      isAdminBroadcast: true,
+    });
+    await msg.save();
+
+    // Emit real-time to all group members via socket (same event name app listens to)
+    if (req.io) {
+      req.io.emit('newCommunityMessage', { ...msg.toObject(), groupId: req.params.groupId });
+    }
+
+    // Send success response FIRST (fire-and-forget push below)
+    res.status(201).json({ success: true, message: msg });
+
+    // Push notification to all members — using Node https (no external dep needed)
+    const tokens = group.members
+      .filter(m => m.expoPushToken)
+      .map(m => m.expoPushToken);
+
+    if (tokens.length > 0) {
+      const https = require('https');
+      const payload = JSON.stringify(tokens.map(to => ({
+        to,
+        sound: 'default',
+        title: '📢 Team Aaskitt',
+        body: text.trim().slice(0, 80),
+        data: { groupId: req.params.groupId },
+      })));
+
+      const options = {
+        hostname: 'exp.host',
+        path: '/--/api/v2/push/send',
+        method: 'POST',
+        headers: {
+          'Accept': 'application/json',
+          'Content-Type': 'application/json',
+          'Content-Length': Buffer.byteLength(payload),
+        },
+      };
+
+      const pushReq = https.request(options, r => {
+        r.on('data', () => {});
+        r.on('end', () => {});
+      });
+      pushReq.on('error', err => console.error('Push error:', err));
+      pushReq.write(payload);
+      pushReq.end();
+    }
+  } catch (err) {
+    console.error(err);
+    if (!res.headersSent) res.status(500).json({ error: 'Server error' });
+  }
+});
+
+
+// PUT /api/admin/groups/:groupId/kick-creator — remove creator from the group (admin override)
+router.put('/groups/:groupId/kick-creator', [auth, admin], async (req, res) => {
+  try {
+    const group = await Group.findById(req.params.groupId);
+    if (!group) return res.status(404).json({ error: 'Group not found' });
+
+    // Remove creator from members list
+    group.members = group.members.filter(m => m.anonymousId !== group.creatorId);
+    await group.save();
+
+    res.json({ success: true, group });
+  } catch (err) {
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// PUT /api/admin/groups/:groupId/transfer-admin — transfer group admin to another member
+router.put('/groups/:groupId/transfer-admin', [auth, admin], async (req, res) => {
+  try {
+    const { newAdminId } = req.body;
+    const group = await Group.findById(req.params.groupId);
+    if (!group) return res.status(404).json({ error: 'Group not found' });
+
+    const targetMember = group.members.find(m => m.anonymousId === newAdminId);
+    if (!targetMember) {
+      return res.status(404).json({ error: 'Selected user is not a member of this group' });
+    }
+
+    group.creatorId = targetMember.anonymousId;
+    group.creatorNickname = targetMember.nickname;
+    await group.save();
+
+    if (req.io) {
+      req.io.emit('groupUpdated', { group });
+    }
+
+    res.json({ success: true, group });
+  } catch (err) {
+    console.error('Transfer admin error:', err);
     res.status(500).json({ error: 'Server error' });
   }
 });

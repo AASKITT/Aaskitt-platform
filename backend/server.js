@@ -10,6 +10,9 @@ const postRoutes = require('./routes/postRoutes');
 const adminRoutes = require('./routes/adminRoutes');
 const notificationRoutes = require('./routes/notificationRoutes');
 const configRoutes = require('./routes/configRoutes');
+const chatRoutes = require('./routes/chatRoutes');
+const communityRoutes = require('./routes/communityRoutes');
+const groupRoutes = require('./routes/groupRoutes');
 
 const app = express();
 const server = http.createServer(app);
@@ -40,7 +43,7 @@ const io = new Server(server, {
 });
 
 app.use(cors(corsOptions));
-app.use(express.json({ limit: '10mb' }));
+app.use(express.json({ limit: '50mb' }));
 
 app.get('/health', (req, res) => res.json({ status: 'ok', timestamp: new Date().toISOString() }));
 
@@ -54,6 +57,9 @@ app.use('/api/posts', postRoutes);
 app.use('/api/admin', adminRoutes);
 app.use('/api/notifications', notificationRoutes);
 app.use('/api/config', configRoutes);
+app.use('/api/chats', chatRoutes);
+app.use('/api/community', communityRoutes);
+app.use('/api/groups', groupRoutes);
 
 // Global 404 handler
 app.use((req, res) => {
@@ -66,13 +72,46 @@ app.use((err, req, res, next) => {
   res.status(500).json({ error: 'Internal server error' });
 });
 
+// In-memory online users map: anonymousId -> socketId
+const onlineUsers = new Map();
+app.use((req, res, next) => { req.onlineUsers = onlineUsers; next(); });
+
 // Socket.io
 io.on('connection', (socket) => {
   const anonymousId = socket.handshake.auth.anonymousId;
   console.log(`User connected: ${anonymousId} (socket: ${socket.id})`);
-  
+
+  if (anonymousId) {
+    // Join personal room
+    socket.join(`user_${anonymousId}`);
+    // Track online
+    onlineUsers.set(anonymousId, socket.id);
+    // Broadcast presence to everyone (other users can listen)
+    io.emit('user_online', { anonymousId });
+  }
+
+  // Join / leave 1-on-1 chat room
+  socket.on('join_chat', ({ chatId }) => {
+    if (chatId) socket.join(`chat_${chatId}`);
+  });
+
+  socket.on('leave_chat', ({ chatId }) => {
+    if (chatId) socket.leave(`chat_${chatId}`);
+  });
+
+  // Client can ask if a specific user is online
+  socket.on('check_online', ({ targetId }, callback) => {
+    if (typeof callback === 'function') {
+      callback({ online: onlineUsers.has(targetId) });
+    }
+  });
+
   socket.on('disconnect', () => {
     console.log(`User disconnected: ${socket.id}`);
+    if (anonymousId) {
+      onlineUsers.delete(anonymousId);
+      io.emit('user_offline', { anonymousId });
+    }
   });
 });
 

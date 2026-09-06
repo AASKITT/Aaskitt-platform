@@ -12,7 +12,8 @@ const postSchema = new mongoose.Schema({
   commentsCount: { type: Number, default: 0 },
   status:        { type: String, enum: ['active', 'deleted', 'reported'], default: 'active' },
   locationName:  { type: String, default: '' },
-  createdAt:     { type: Date, default: Date.now }
+  createdAt:     { type: Date, default: Date.now },
+  editedAt:      { type: Date, default: null }
 });
 
 postSchema.index({ location: '2dsphere' });
