@@ -48,12 +48,29 @@ router.get('/dashboard-stats', [auth, admin], async (req, res) => {
     const today = new Date();
     today.setHours(0, 0, 0, 0);
 
-    const totalUsers = await User.countDocuments({ role: 'user' });
-    const activeUsersToday = await User.countDocuments({ role: 'user', lastActive: { $gte: today } });
-    const totalPosts = await Post.countDocuments();
-    const activePosts = await Post.countDocuments({ status: 'active' });
-    const totalComments = await Comment.countDocuments();
-    const postsToday = await Post.countDocuments({ createdAt: { $gte: today } });
+    const [
+      totalUsers,
+      activeUsersToday,
+      googleUsersCount,
+      guestUsersCount,
+      namedUsersCount,
+      pendingNicknameCount,
+      totalPosts,
+      activePosts,
+      totalComments,
+      postsToday
+    ] = await Promise.all([
+      User.countDocuments({ role: 'user' }),
+      User.countDocuments({ role: 'user', lastActive: { $gte: today } }),
+      User.countDocuments({ role: 'user', $or: [{ googleId: { $exists: true, $ne: null } }, { email: { $exists: true, $ne: null } }] }),
+      User.countDocuments({ role: 'user', googleId: { $in: [null, undefined] }, email: { $in: [null, undefined] } }),
+      User.countDocuments({ role: 'user', nickname: { $exists: true, $ne: null } }),
+      User.countDocuments({ role: 'user', nickname: { $in: [null, undefined] } }),
+      Post.countDocuments(),
+      Post.countDocuments({ status: 'active' }),
+      Comment.countDocuments(),
+      Post.countDocuments({ createdAt: { $gte: today } })
+    ]);
 
     // Calculate recent activity (last 7 days)
     const sevenDaysAgo = new Date();
@@ -76,6 +93,10 @@ router.get('/dashboard-stats', [auth, admin], async (req, res) => {
     res.json({
       totalUsers,
       activeUsersToday,
+      googleUsersCount,
+      guestUsersCount,
+      namedUsersCount,
+      pendingNicknameCount,
       totalPosts,
       activePosts,
       totalComments,
@@ -84,6 +105,7 @@ router.get('/dashboard-stats', [auth, admin], async (req, res) => {
       recentActivity
     });
   } catch (err) {
+    console.error('Error in dashboard-stats:', err);
     res.status(500).json({ error: 'Server error' });
   }
 });
@@ -91,19 +113,103 @@ router.get('/dashboard-stats', [auth, admin], async (req, res) => {
 // GET /api/admin/users
 router.get('/users', [auth, admin], async (req, res) => {
   try {
-    const { search } = req.query;
+    const { search, type } = req.query;
     let query = { role: 'user' };
 
-    if (search) {
+    if (search && search.trim()) {
+      const term = search.trim();
       query.$or = [
-        { nickname: { $regex: search, $options: 'i' } },
-        { anonymousId: { $regex: search, $options: 'i' } }
+        { nickname: { $regex: term, $options: 'i' } },
+        { anonymousId: { $regex: term, $options: 'i' } },
+        { email: { $regex: term, $options: 'i' } }
       ];
     }
 
-    const users = await User.find(query).sort({ createdAt: -1 }).limit(100);
+    if (type === 'google') {
+      query.$or = [{ googleId: { $exists: true, $ne: null } }, { email: { $exists: true, $ne: null } }];
+    } else if (type === 'guest') {
+      query.googleId = { $in: [null, undefined] };
+      query.email = { $in: [null, undefined] };
+    } else if (type === 'named') {
+      query.nickname = { $exists: true, $ne: null };
+    } else if (type === 'pending_nickname') {
+      query.nickname = { $in: [null, undefined] };
+    }
+
+    const rawUsers = await User.find(query).sort({ createdAt: -1 }).limit(150);
+    
+    const users = rawUsers.map(u => ({
+      _id: u._id,
+      id: u._id,
+      anonymousId: u.anonymousId,
+      nickname: u.nickname || 'Pending Setup',
+      rawNickname: u.nickname || null,
+      email: u.email || 'N/A',
+      photoUrl: u.photoUrl || null,
+      isGoogleLinked: !!(u.googleId || u.email),
+      googleId: u.googleId || null,
+      role: u.role,
+      lastActive: u.lastActive,
+      createdAt: u.createdAt,
+    }));
+
     res.json(users);
   } catch (err) {
+    console.error('Error in /api/admin/users:', err);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// GET /api/admin/users/:id
+router.get('/users/:id', [auth, admin], async (req, res) => {
+  try {
+    const user = await User.findById(req.params.id);
+    if (!user) return res.status(404).json({ error: 'User not found' });
+
+    const [postsCount, commentsCount] = await Promise.all([
+      Post.countDocuments({ anonymousId: user.anonymousId }),
+      Comment.countDocuments({ anonymousId: user.anonymousId }),
+    ]);
+
+    res.json({
+      ...user.toObject(),
+      isGoogleLinked: !!(user.googleId || user.email),
+      postsCount,
+      commentsCount,
+    });
+  } catch (err) {
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// PUT /api/admin/users/:id — Edit user nickname or role
+router.put('/users/:id', [auth, admin], async (req, res) => {
+  try {
+    const { nickname, role } = req.body;
+    const user = await User.findById(req.params.id);
+    if (!user) return res.status(404).json({ error: 'User not found' });
+
+    if (nickname && nickname.trim() && nickname !== user.nickname) {
+      const { generateUniqueNickname } = require('../utils/nickname');
+      const uniqueNickname = await generateUniqueNickname(nickname.trim());
+      user.nickname = uniqueNickname;
+
+      // Update nickname in posts and comments
+      await Promise.all([
+        Post.updateMany({ anonymousId: user.anonymousId }, { nickname: uniqueNickname }).catch(() => {}),
+        Comment.updateMany({ anonymousId: user.anonymousId }, { nickname: uniqueNickname }).catch(() => {}),
+        CommunityMessage.updateMany({ anonymousId: user.anonymousId }, { nickname: uniqueNickname }).catch(() => {}),
+      ]);
+    }
+
+    if (role && ['user', 'admin'].includes(role)) {
+      user.role = role;
+    }
+
+    await user.save();
+    res.json({ success: true, user });
+  } catch (err) {
+    console.error('Admin user update error:', err);
     res.status(500).json({ error: 'Server error' });
   }
 });
@@ -136,19 +242,25 @@ router.delete('/users/:id', [auth, admin], async (req, res) => {
     const user = await User.findById(req.params.id);
     if (!user) return res.status(404).json({ error: 'User not found' });
 
-    // Delete user's posts and comments
+    const Notification = require('../models/Notification');
+
+    // Delete user's posts, comments, messages, notifications
     const userPosts = await Post.find({ anonymousId: user.anonymousId });
     for (let post of userPosts) {
       await Comment.deleteMany({ post: post._id });
       req.io.emit('postDeleted', post._id.toString());
     }
-    await Post.deleteMany({ anonymousId: user.anonymousId });
-    await Comment.deleteMany({ anonymousId: user.anonymousId });
-    
-    await User.findByIdAndDelete(req.params.id);
+    await Promise.all([
+      Post.deleteMany({ anonymousId: user.anonymousId }),
+      Comment.deleteMany({ anonymousId: user.anonymousId }),
+      CommunityMessage.deleteMany({ anonymousId: user.anonymousId }),
+      Notification.deleteMany({ recipientId: user.anonymousId }),
+      User.findByIdAndDelete(req.params.id)
+    ]);
     
     res.json({ success: true });
   } catch (err) {
+    console.error('Error deleting user:', err);
     res.status(500).json({ error: 'Server error' });
   }
 });

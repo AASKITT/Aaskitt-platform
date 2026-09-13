@@ -51,9 +51,11 @@ export default function Dashboard() {
         </div>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-5">
         <StatsCard title="Total Users" value={stats?.totalUsers || 0} icon={Users} colorClass="bg-blue-100 text-blue-600" />
-        <StatsCard title="Active Today (Users)" value={stats?.activeUsersToday || 0} icon={UserCheck} colorClass="bg-emerald-100 text-emerald-600" />
+        <StatsCard title="Google Accounts" value={stats?.googleUsersCount || 0} icon={UserCheck} colorClass="bg-sky-100 text-sky-600" />
+        <StatsCard title="Guest Users" value={stats?.guestUsersCount || 0} icon={Users} colorClass="bg-slate-100 text-slate-600" />
+        <StatsCard title="Active Today" value={stats?.activeUsersToday || 0} icon={Activity} colorClass="bg-emerald-100 text-emerald-600" />
         <StatsCard title="Total Posts" value={stats?.totalPosts || 0} icon={MessageSquare} colorClass="bg-purple-100 text-purple-600" />
         <StatsCard title="Active Posts" value={stats?.activePosts || 0} icon={Activity} colorClass="bg-indigo-100 text-indigo-600" />
         <StatsCard title="Total Comments" value={stats?.totalComments || 0} icon={MessageCircle} colorClass="bg-orange-100 text-orange-600" />
