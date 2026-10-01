@@ -1,5 +1,5 @@
 import { NavLink, useNavigate } from 'react-router-dom';
-import { LayoutDashboard, Users, MessageSquare, LogOut, X } from 'lucide-react';
+import { LayoutDashboard, Users, MessageSquare, LogOut, X, Store, Settings as SettingsIcon } from 'lucide-react';
 
 export default function Sidebar({ isOpen, setIsOpen }) {
   const navigate = useNavigate();
@@ -12,9 +12,10 @@ export default function Sidebar({ isOpen, setIsOpen }) {
   const navItems = [
     { name: 'Dashboard', path: '/admin/dashboard', icon: LayoutDashboard },
     { name: 'Users', path: '/admin/users', icon: Users },
+    { name: 'Sellers', path: '/admin/sellers', icon: Store },
     { name: 'Posts', path: '/admin/posts', icon: MessageSquare },
     { name: 'Groups', path: '/admin/groups', icon: Users },
-    { name: 'Settings', path: '/admin/settings', icon: LayoutDashboard },
+    { name: 'Settings', path: '/admin/settings', icon: SettingsIcon },
   ];
 
   return (

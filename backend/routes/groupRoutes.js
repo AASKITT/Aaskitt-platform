@@ -47,7 +47,7 @@ function sendPushToMany(tokens, title, body, data = {}) {
   req.end();
 }
 
-// GET /api/groups — list all groups (sorted by member count descending with latest post attached)
+// GET /api/groups — list all groups (attached with latest post and sorted by activity)
 router.get('/', async (req, res) => {
   try {
     const groups = await Group.aggregate([
@@ -57,24 +57,58 @@ router.get('/', async (req, res) => {
         }
       },
       {
-        $sort: { memberCount: -1, createdAt: -1 }
-      },
-      {
         $limit: 100
       }
     ]);
 
+    const userLat = parseFloat(req.query.latitude);
+    const userLng = parseFloat(req.query.longitude);
+    const toRad = deg => (deg * Math.PI) / 180;
+    const R = 6371;
+
     // Attach latest message for each group
     const groupsWithLatestPost = await Promise.all(
       groups.map(async (group) => {
-        const latestPost = await CommunityMessage.findOne({ groupId: group._id })
-          .sort({ createdAt: -1 });
+        let latestPost = null;
+        const isNearbyGroup = group.name && group.name.trim().toLowerCase() === 'nearby';
+
+        if (isNearbyGroup && !isNaN(userLat) && !isNaN(userLng)) {
+          // Find recent messages in Nearby group and pick latest within 6km
+          const recentMsgs = await CommunityMessage.find({ groupId: group._id })
+            .sort({ createdAt: -1 })
+            .limit(50);
+          latestPost = recentMsgs.find(msg => {
+            const coords = msg.location?.coordinates;
+            if (!coords || !Array.isArray(coords) || coords.length < 2) return false;
+            const dLat = toRad(coords[1] - userLat);
+            const dLng = toRad(coords[0] - userLng);
+            const a = Math.sin(dLat / 2) ** 2 + Math.cos(toRad(userLat)) * Math.cos(toRad(coords[1])) * Math.sin(dLng / 2) ** 2;
+            const distKm = R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+            return distKm <= 6.0;
+          }) || null;
+        } else {
+          latestPost = await CommunityMessage.findOne({ groupId: group._id })
+            .sort({ createdAt: -1 });
+        }
+
         return {
           ...group,
           latestPost: latestPost || null
         };
       })
     );
+
+    // Sort: Nearby group ALWAYS on top, then groups with recent posts first, then group creation time
+    groupsWithLatestPost.sort((a, b) => {
+      const isNearbyA = a.name && a.name.trim().toLowerCase() === 'nearby';
+      const isNearbyB = b.name && b.name.trim().toLowerCase() === 'nearby';
+      if (isNearbyA && !isNearbyB) return -1;
+      if (!isNearbyA && isNearbyB) return 1;
+
+      const timeA = new Date(a.latestPost?.createdAt || a.createdAt).getTime();
+      const timeB = new Date(b.latestPost?.createdAt || b.createdAt).getTime();
+      return timeB - timeA;
+    });
 
     res.json(groupsWithLatestPost);
   } catch (err) {
@@ -127,7 +161,7 @@ router.post('/', async (req, res) => {
   try {
     const creatorId = req.body.creatorId || req.body.anonymousId;
     const creatorNickname = req.body.creatorNickname || req.body.nickname;
-    const { name, rules, expoPushToken, tags, dp } = req.body;
+    const { name, rules, expoPushToken, tags, dp, latitude, longitude, locationName, location } = req.body;
 
     if (!name?.trim()) return res.status(400).json({ error: 'Group name required' });
     if (!creatorId || !creatorNickname) return res.status(400).json({ error: 'Creator info required' });
@@ -144,6 +178,13 @@ router.post('/', async (req, res) => {
       ? [...new Set(tags.map(t => t.trim()).filter(t => t.length > 0 && t.length <= 20))].slice(0, 10)
       : [];
 
+    let locationObj = null;
+    if (latitude != null && longitude != null) {
+      locationObj = { type: 'Point', coordinates: [Number(longitude), Number(latitude)] };
+    } else if (location && Array.isArray(location.coordinates) && location.coordinates.length >= 2) {
+      locationObj = { type: 'Point', coordinates: [Number(location.coordinates[0]), Number(location.coordinates[1])] };
+    }
+
     const group = new Group({
       name: name.trim(),
       rules: rules?.trim() || '',
@@ -152,6 +193,8 @@ router.post('/', async (req, res) => {
       inviteCode,
       tags: cleanTags,
       dp: dp || null,
+      location: locationObj,
+      locationName: locationName || '',
       members: [{ anonymousId: creatorId, nickname: creatorNickname, expoPushToken: expoPushToken || null }],
     });
     await group.save();

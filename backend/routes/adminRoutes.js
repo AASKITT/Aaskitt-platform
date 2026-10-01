@@ -7,8 +7,10 @@ const Post = require('../models/Post');
 const Comment = require('../models/Comment');
 const Group = require('../models/Group');
 const CommunityMessage = require('../models/CommunityMessage');
+const Product = require('../models/Product');
 const auth = require('../middleware/auth');
 const admin = require('../middleware/admin');
+const { repackAllCaches } = require('./productRoutes');
 
 // POST /api/admin/login
 router.post('/login', async (req, res) => {
@@ -58,7 +60,10 @@ router.get('/dashboard-stats', [auth, admin], async (req, res) => {
       totalPosts,
       activePosts,
       totalComments,
-      postsToday
+      postsToday,
+      totalSellers,
+      suspendedSellers,
+      totalProducts
     ] = await Promise.all([
       User.countDocuments({ role: 'user' }),
       User.countDocuments({ role: 'user', lastActive: { $gte: today } }),
@@ -69,7 +74,10 @@ router.get('/dashboard-stats', [auth, admin], async (req, res) => {
       Post.countDocuments(),
       Post.countDocuments({ status: 'active' }),
       Comment.countDocuments(),
-      Post.countDocuments({ createdAt: { $gte: today } })
+      Post.countDocuments({ createdAt: { $gte: today } }),
+      User.countDocuments({ isSeller: true, isSellerSuspended: { $ne: true } }),
+      User.countDocuments({ isSellerSuspended: true }),
+      Product.countDocuments({ isActive: true })
     ]);
 
     // Calculate recent activity (last 7 days)
@@ -101,6 +109,9 @@ router.get('/dashboard-stats', [auth, admin], async (req, res) => {
       activePosts,
       totalComments,
       postsToday,
+      totalSellers,
+      suspendedSellers,
+      totalProducts,
       onlineCount,
       recentActivity
     });
@@ -475,6 +486,179 @@ router.put('/config', [auth, admin], async (req, res) => {
     await config.save();
     res.json(config);
   } catch (err) {
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// ─── Seller Management Routes ────────────────────────────────────────────────
+
+// GET /api/admin/sellers — List all registered sellers
+router.get('/sellers', [auth, admin], async (req, res) => {
+  try {
+    const sellers = await User.find({
+      $or: [
+        { isSeller: true },
+        { isSellerSuspended: true },
+        { shopName: { $ne: null } }
+      ]
+    }).sort({ createdAt: -1 }).lean();
+
+    // Attach product counts for each seller
+    const sellersWithStats = await Promise.all(
+      sellers.map(async (seller) => {
+        const productCount = await Product.countDocuments({
+          $or: [
+            { sellerId: seller.anonymousId },
+            { sellerId: seller._id.toString() }
+          ]
+        });
+        return {
+          _id: seller._id,
+          anonymousId: seller.anonymousId,
+          nickname: seller.nickname || 'Anonymous',
+          email: seller.email || null,
+          shopName: seller.shopName || 'Untitled Shop',
+          sellerPhone: seller.sellerPhone || null,
+          shopLocation: seller.shopLocation || null,
+          shopImage: seller.shopImage || null,
+          shopDetailsComplete: !!seller.shopDetailsComplete,
+          isSeller: !!seller.isSeller,
+          isSellerSuspended: !!seller.isSellerSuspended,
+          sellerSuspendedAt: seller.sellerSuspendedAt || null,
+          sellerSuspendedReason: seller.sellerSuspendedReason || null,
+          productCount,
+          lastActive: seller.lastActive,
+          createdAt: seller.createdAt,
+        };
+      })
+    );
+
+    res.json(sellersWithStats);
+  } catch (err) {
+    console.error('Error fetching admin sellers:', err);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// POST /api/admin/sellers/:id/kick — Kick & Suspend seller and delete all their products
+router.post('/sellers/:id/kick', [auth, admin], async (req, res) => {
+  try {
+    const { reason } = req.body;
+    const user = await User.findById(req.params.id);
+    if (!user) return res.status(404).json({ error: 'Seller not found' });
+
+    user.isSeller = false;
+    user.isSellerSuspended = true;
+    user.sellerSuspendedAt = new Date();
+    user.sellerSuspendedReason = reason || 'Kicked and suspended by administrator';
+    await user.save();
+
+    // Delete all products added by this seller from the marketplace
+    const deleteResult = await Product.deleteMany({
+      $or: [
+        { sellerId: user.anonymousId },
+        { sellerId: user._id.toString() }
+      ]
+    });
+    repackAllCaches().catch(() => {});
+
+    if (req.io) {
+      req.io.emit('sellerKicked', {
+        sellerId: user.anonymousId,
+        shopName: user.shopName,
+      });
+    }
+
+    res.json({
+      success: true,
+      message: `Seller "${user.shopName || user.nickname}" kicked and suspended. ${deleteResult.deletedCount} products removed.`,
+      deletedProductsCount: deleteResult.deletedCount,
+      user: {
+        _id: user._id,
+        anonymousId: user.anonymousId,
+        shopName: user.shopName,
+        isSeller: user.isSeller,
+        isSellerSuspended: user.isSellerSuspended,
+        sellerSuspendedAt: user.sellerSuspendedAt,
+        sellerSuspendedReason: user.sellerSuspendedReason,
+      }
+    });
+  } catch (err) {
+    console.error('Error kicking seller:', err);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// POST /api/admin/sellers/:id/unsuspend — Restore seller privileges
+router.post('/sellers/:id/unsuspend', [auth, admin], async (req, res) => {
+  try {
+    const user = await User.findById(req.params.id);
+    if (!user) return res.status(404).json({ error: 'Seller not found' });
+
+    user.isSeller = true;
+    user.isSellerSuspended = false;
+    user.sellerSuspendedAt = null;
+    user.sellerSuspendedReason = null;
+    await user.save();
+
+    res.json({
+      success: true,
+      message: `Seller "${user.shopName || user.nickname}" privileges restored.`,
+      user: {
+        _id: user._id,
+        anonymousId: user.anonymousId,
+        shopName: user.shopName,
+        isSeller: user.isSeller,
+        isSellerSuspended: user.isSellerSuspended,
+      }
+    });
+  } catch (err) {
+    console.error('Error unsuspending seller:', err);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// GET /api/admin/sellers/:id/products — List all products of a seller
+router.get('/sellers/:id/products', [auth, admin], async (req, res) => {
+  try {
+    const user = await User.findById(req.params.id);
+    if (!user) return res.status(404).json({ error: 'Seller not found' });
+
+    const products = await Product.find({
+      $or: [
+        { sellerId: user.anonymousId },
+        { sellerId: user._id.toString() }
+      ]
+    }).sort({ createdAt: -1 });
+
+    res.json({
+      seller: {
+        _id: user._id,
+        shopName: user.shopName,
+        sellerPhone: user.sellerPhone,
+        shopLocation: user.shopLocation,
+        shopImage: user.shopImage,
+        shopDetailsComplete: !!user.shopDetailsComplete,
+        isSellerSuspended: user.isSellerSuspended,
+      },
+      products
+    });
+  } catch (err) {
+    console.error('Error fetching seller products:', err);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// DELETE /api/admin/products/:productId — Delete a single product by admin
+router.delete('/products/:productId', [auth, admin], async (req, res) => {
+  try {
+    const product = await Product.findByIdAndDelete(req.params.productId);
+    if (!product) return res.status(404).json({ error: 'Product not found' });
+    repackAllCaches().catch(() => {});
+
+    res.json({ success: true, message: 'Product deleted successfully' });
+  } catch (err) {
+    console.error('Error deleting product:', err);
     res.status(500).json({ error: 'Server error' });
   }
 });

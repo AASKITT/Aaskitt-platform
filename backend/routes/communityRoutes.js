@@ -30,16 +30,104 @@ function sendPushToMany(tokens, title, body, data = {}) {
   req.end();
 }
 
+// GET /api/community/feed/all — fetch all community messages across all groups for main feed
+router.get('/feed/all', async (req, res) => {
+  try {
+    const messages = await CommunityMessage.find({})
+      .sort({ createdAt: -1 })
+      .limit(100)
+      .populate('groupId', 'name dp rules members tags creatorId')
+      .populate('replyTo');
+
+    const formatted = messages.map(msg => {
+      const group = msg.groupId;
+      return {
+        _id: msg._id,
+        anonymousId: msg.anonymousId,
+        nickname: msg.nickname,
+        content: msg.text || (msg.image ? '📷 Shared an image' : ''),
+        text: msg.text,
+        image: msg.image,
+        tag: msg.tag,
+        groupId: group?._id ? group._id.toString() : (msg.groupId ? msg.groupId.toString() : ''),
+        groupName: group?.name || 'Community',
+        groupDp: group?.dp || null,
+        groupRules: group?.rules || '',
+        groupTags: group?.tags || [],
+        groupMembersCount: group?.members?.length || 0,
+        isAdminBroadcast: msg.isAdminBroadcast,
+        commentsCount: msg.commentsCount || 0,
+        views: msg.views || 0,
+        createdAt: msg.createdAt,
+        edited: msg.edited,
+        location: msg.location,
+        isCommunityPost: true,
+      };
+    });
+
+    res.json(formatted);
+  } catch (err) {
+    console.error('Error fetching community feed:', err);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
 // GET /api/community/:groupId  — fetch messages for a group
 router.get('/:groupId', async (req, res) => {
   try {
     const group = await Group.findById(req.params.groupId);
     if (!group) return res.status(404).json({ error: 'Group not found' });
 
-    const messages = await CommunityMessage.find({ groupId: req.params.groupId })
+    let messages = await CommunityMessage.find({ groupId: req.params.groupId })
       .sort({ createdAt: -1 })
       .limit(100)
       .populate('replyTo');
+
+    // If this is the "Nearby" group, filter messages strictly within 6km of user location
+    const isNearbyGroup = group.name && group.name.trim().toLowerCase() === 'nearby';
+    if (isNearbyGroup) {
+      const userLat = parseFloat(req.query.latitude);
+      const userLng = parseFloat(req.query.longitude);
+      const viewerId = req.query.anonymousId;
+
+      console.log(`[Nearby GET] userLat: ${userLat}, userLng: ${userLng}, viewerId: ${viewerId}, totalMsgsInGroup: ${messages.length}`);
+
+      if (!isNaN(userLat) && !isNaN(userLng)) {
+        const toRad = deg => (deg * Math.PI) / 180;
+        const R = 6371; // Earth radius in km
+
+        messages = messages.filter(msg => {
+          // User's own posts are always visible to them
+          if (viewerId && msg.anonymousId === viewerId) return true;
+
+          const coords = msg.location?.coordinates;
+          if (!coords || !Array.isArray(coords) || coords.length < 2) {
+            return false;
+          }
+
+          const msgLng = coords[0];
+          const msgLat = coords[1];
+          if (isNaN(msgLat) || isNaN(msgLng)) return false;
+
+          const dLat = toRad(msgLat - userLat);
+          const dLng = toRad(msgLng - userLng);
+          const lat1 = toRad(userLat);
+          const lat2 = toRad(msgLat);
+
+          const a =
+            Math.sin(dLat / 2) ** 2 +
+            Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLng / 2) ** 2;
+          const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+          const distKm = R * c;
+
+          const isInc = distKm <= 6.0;
+          console.log(`[Nearby Msg Filter] "${msg.text?.substring(0, 15)}" by ${msg.nickname} - dist: ${distKm.toFixed(2)} km -> ${isInc ? 'INCLUDED' : 'EXCLUDED'}`);
+          return isInc;
+        });
+        console.log(`[Nearby GET] Result after 6km filter: ${messages.length} messages`);
+      }
+    }
+
     res.json(messages.reverse());
   } catch (err) {
     console.error(err);
@@ -61,8 +149,9 @@ router.post('/:groupId', async (req, res) => {
       return res.status(403).json({ error: 'You are banned from this group.' });
     }
 
-    // Must be a member to send
-    const isMember = group.members.some(m => m.anonymousId === anonymousId);
+    // Must be a member to send (except for the open public "Nearby" community group)
+    const isNearby = group.name && group.name.trim().toLowerCase() === 'nearby';
+    const isMember = isNearby || group.members.some(m => m.anonymousId === anonymousId);
     if (!isMember) {
       return res.status(403).json({ error: 'Join the group first.' });
     }
@@ -212,7 +301,7 @@ router.delete('/:groupId/messages/:msgId', async (req, res) => {
     let canDelete = false;
     if (msg.anonymousId === requesterId || requesterId === 'team_aaskitt') {
       canDelete = true;
-    } else if (groupId !== 'main') {
+    } else if (groupId && groupId !== 'main') {
       const group = await Group.findById(groupId);
       if (group && group.creatorId === requesterId) {
         canDelete = true;
@@ -225,11 +314,76 @@ router.delete('/:groupId/messages/:msgId', async (req, res) => {
 
     await CommunityMessage.findByIdAndDelete(msgId);
     if (req.io) {
-      req.io.emit('communityMessageDeleted', { groupId, msgId });
+      req.io.emit('communityMessageDeleted', { groupId: msg.groupId, msgId });
     }
     res.json({ success: true, msgId });
   } catch (err) {
     console.error('Delete message error:', err);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// DELETE /api/community/messages/:msgId — direct delete
+router.delete('/messages/:msgId', async (req, res) => {
+  try {
+    const { msgId } = req.params;
+    const requesterId = req.body.requesterId || req.body.anonymousId;
+
+    const msg = await CommunityMessage.findById(msgId);
+    if (!msg) return res.status(404).json({ error: 'Message not found' });
+
+    let canDelete = false;
+    if (msg.anonymousId === requesterId || requesterId === 'team_aaskitt') {
+      canDelete = true;
+    } else if (msg.groupId) {
+      const group = await Group.findById(msg.groupId);
+      if (group && group.creatorId === requesterId) {
+        canDelete = true;
+      }
+    }
+
+    if (!canDelete) {
+      return res.status(403).json({ error: 'Not authorized to delete this message' });
+    }
+
+    await CommunityMessage.findByIdAndDelete(msgId);
+    if (req.io) {
+      req.io.emit('communityMessageDeleted', { groupId: msg.groupId, msgId });
+    }
+    res.json({ success: true, msgId });
+  } catch (err) {
+    console.error('Delete message error:', err);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// PUT /api/community/messages/:msgId/edit — direct edit
+router.put('/messages/:msgId/edit', async (req, res) => {
+  try {
+    const { msgId } = req.params;
+    const { anonymousId, requesterId, content, text } = req.body;
+    const authorId = anonymousId || requesterId;
+
+    const msg = await CommunityMessage.findById(msgId);
+    if (!msg) return res.status(404).json({ error: 'Message not found' });
+    if (msg.anonymousId !== authorId) {
+      return res.status(403).json({ error: 'Not authorized to edit' });
+    }
+
+    const newText = (text || content || '').trim();
+    if (!newText && !msg.image) {
+      return res.status(400).json({ error: 'Message text required' });
+    }
+
+    msg.text = newText;
+    msg.edited = true;
+    await msg.save();
+
+    if (req.io) {
+      req.io.emit('communityMessageUpdated', { groupId: msg.groupId, message: msg });
+    }
+    res.json(msg);
+  } catch (err) {
     res.status(500).json({ error: 'Server error' });
   }
 });

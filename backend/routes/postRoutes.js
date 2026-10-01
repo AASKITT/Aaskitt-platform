@@ -105,45 +105,43 @@ router.post('/', async (req, res) => {
   }
 });
 
-// GET /api/posts/nearby (Main Feed)
+// GET /api/posts/nearby (Main Feed — returns community posts)
 router.get('/nearby', async (req, res) => {
   try {
-    const { lat, lng, category, subCategory } = req.query;
-    
-    let query = { status: { $in: ['active', 'reported'] } };
-
-    if (category) {
-      if (category === 'rooms') {
-        if (subCategory === 'male') {
-          // \b ensures it matches "male" but not "female". Negative lookbehind (?<!fe) is not fully supported in all Mongo versions, so \b is safer.
-          query.content = { $regex: /\b(male|bachelor|bachelors|boys|gents|men)\b/i };
-        } else if (subCategory === 'female') {
-          query.content = { $regex: /\b(female|girls|ladies|women)\b/i };
-        } else if (subCategory === 'penthouse') {
-          query.content = { $regex: /\b(penthouse|pent house|pent-house)\b/i };
-        } else if (subCategory === 'family') {
-          query.content = { $regex: /\b(family|couple|married)\b/i };
-        } else if (subCategory === '1bhk') {
-          query.content = { $regex: /\b(1\s?bhk|one bhk)\b/i };
-        } else if (subCategory === '2bhk') {
-          query.content = { $regex: /\b(2\s?bhk|two bhk)\b/i };
-        } else {
-          // All rooms
-          query.content = { $regex: /\b(room|pg|1bhk|2bhk|rent|roommate|vacancy|male|female|family|penthouse)\b/i };
-        }
-      } else if (category === 'buy_sell') {
-        query.content = { $regex: /buy|sell|sale|price|bechna|kharidna/i };
-      } else if (category === 'jobs') {
-        query.content = { $regex: /job|hiring|part time|work|home tuition/i };
-      }
-    }
-
-    // Fetch the 50 latest posts globally, filtered by category, sorted by newest first
-    const posts = await Post.find(query)
+    const CommunityMessage = require('../models/CommunityMessage');
+    const messages = await CommunityMessage.find({})
       .sort({ createdAt: -1 })
-      .limit(50);
+      .limit(100)
+      .populate('groupId', 'name dp rules members tags creatorId')
+      .populate('replyTo');
 
-    res.json(posts);
+    const formatted = messages.map(msg => {
+      const group = msg.groupId;
+      return {
+        _id: msg._id,
+        anonymousId: msg.anonymousId,
+        nickname: msg.nickname,
+        content: msg.text || (msg.image ? '📷 Shared an image' : ''),
+        text: msg.text,
+        image: msg.image,
+        tag: msg.tag,
+        groupId: group?._id ? group._id.toString() : (msg.groupId ? msg.groupId.toString() : ''),
+        groupName: group?.name || 'Community',
+        groupDp: group?.dp || null,
+        groupRules: group?.rules || '',
+        groupTags: group?.tags || [],
+        groupMembersCount: group?.members?.length || 0,
+        isAdminBroadcast: msg.isAdminBroadcast,
+        commentsCount: msg.commentsCount || 0,
+        views: msg.views || 0,
+        createdAt: msg.createdAt,
+        edited: msg.edited,
+        location: msg.location,
+        isCommunityPost: true,
+      };
+    });
+
+    res.json(formatted);
   } catch (err) {
     console.error('Error fetching nearby posts:', err);
     res.status(500).json({ error: 'Server error' });
@@ -153,8 +151,33 @@ router.get('/nearby', async (req, res) => {
 // GET /api/posts/user/:anonymousId
 router.get('/user/:anonymousId', async (req, res) => {
   try {
-    const posts = await Post.find({ anonymousId: req.params.anonymousId }).sort({ createdAt: -1 });
-    res.json(posts);
+    const CommunityMessage = require('../models/CommunityMessage');
+    const messages = await CommunityMessage.find({ anonymousId: req.params.anonymousId })
+      .sort({ createdAt: -1 })
+      .populate('groupId', 'name dp rules members tags creatorId');
+
+    const formatted = messages.map(msg => {
+      const group = msg.groupId;
+      return {
+        _id: msg._id,
+        anonymousId: msg.anonymousId,
+        nickname: msg.nickname,
+        content: msg.text || (msg.image ? '📷 Shared an image' : ''),
+        text: msg.text,
+        image: msg.image,
+        tag: msg.tag,
+        groupId: group?._id ? group._id.toString() : (msg.groupId ? msg.groupId.toString() : ''),
+        groupName: group?.name || 'Community',
+        groupDp: group?.dp || null,
+        commentsCount: msg.commentsCount || 0,
+        views: msg.views || 0,
+        createdAt: msg.createdAt,
+        edited: msg.edited,
+        isCommunityPost: true,
+      };
+    });
+
+    res.json(formatted);
   } catch (err) {
     console.error('Error fetching user posts:', err);
     res.status(500).json({ error: 'Server error' });
@@ -164,6 +187,30 @@ router.get('/user/:anonymousId', async (req, res) => {
 // GET /api/posts/:id
 router.get('/:id', async (req, res) => {
   try {
+    const CommunityMessage = require('../models/CommunityMessage');
+    const msg = await CommunityMessage.findById(req.params.id)
+      .populate('groupId', 'name dp rules members tags creatorId');
+    if (msg) {
+      const group = msg.groupId;
+      return res.json({
+        _id: msg._id,
+        anonymousId: msg.anonymousId,
+        nickname: msg.nickname,
+        content: msg.text || (msg.image ? '📷 Shared an image' : ''),
+        text: msg.text,
+        image: msg.image,
+        tag: msg.tag,
+        groupId: group?._id ? group._id.toString() : (msg.groupId ? msg.groupId.toString() : ''),
+        groupName: group?.name || 'Community',
+        groupDp: group?.dp || null,
+        commentsCount: msg.commentsCount || 0,
+        views: msg.views || 0,
+        createdAt: msg.createdAt,
+        edited: msg.edited,
+        isCommunityPost: true,
+      });
+    }
+
     const post = await Post.findById(req.params.id);
     if (!post) return res.status(404).json({ error: 'Post not found' });
     res.json(post);
@@ -179,6 +226,20 @@ router.put('/:id/edit', async (req, res) => {
     if (!content || !content.trim()) {
       return res.status(400).json({ error: 'Content cannot be empty.' });
     }
+
+    const CommunityMessage = require('../models/CommunityMessage');
+    const msg = await CommunityMessage.findById(req.params.id);
+    if (msg) {
+      if (msg.anonymousId !== anonymousId) {
+        return res.status(403).json({ error: 'Not authorized' });
+      }
+      msg.text = content.trim();
+      msg.edited = true;
+      await msg.save();
+      req.io.emit('postEdited', { postId: msg._id, content: msg.text, editedAt: new Date() });
+      return res.json({ ...msg.toObject(), content: msg.text });
+    }
+
     const post = await Post.findById(req.params.id);
     if (!post) return res.status(404).json({ error: 'Post not found' });
     if (post.anonymousId !== anonymousId) {
@@ -187,7 +248,6 @@ router.put('/:id/edit', async (req, res) => {
     post.content = content.trim();
     post.editedAt = new Date();
     await post.save();
-    // Emit real-time update so other clients update instantly
     req.io.emit('postEdited', { postId: post._id, content: post.content, editedAt: post.editedAt });
     res.json(post);
   } catch (err) {
@@ -198,6 +258,12 @@ router.put('/:id/edit', async (req, res) => {
 // PUT /api/posts/:id/view
 router.put('/:id/view', async (req, res) => {
   try {
+    const CommunityMessage = require('../models/CommunityMessage');
+    const msg = await CommunityMessage.findByIdAndUpdate(req.params.id, { $inc: { views: 1 } }, { new: true });
+    if (msg) {
+      return res.json({ success: true, views: msg.views });
+    }
+
     const post = await Post.findByIdAndUpdate(req.params.id, { $inc: { views: 1 } }, { new: true });
     if (!post) return res.status(404).json({ error: 'Post not found' });
     
@@ -213,6 +279,24 @@ router.post('/:id/comments', async (req, res) => {
     const { anonymousId, nickname, text, parentCommentId } = req.body;
     const postId = req.params.id;
 
+    const CommunityMessage = require('../models/CommunityMessage');
+    const MessageComment = require('../models/MessageComment');
+    const msg = await CommunityMessage.findById(postId);
+    if (msg) {
+      const comment = new MessageComment({
+        messageId: postId,
+        anonymousId,
+        nickname,
+        text,
+        parentComment: parentCommentId || null
+      });
+      await comment.save();
+      msg.commentsCount = (msg.commentsCount || 0) + 1;
+      await msg.save();
+      req.io.emit('commentAdded', { postId, comment });
+      return res.status(201).json(comment);
+    }
+
     const post = await Post.findById(postId);
     if (!post) return res.status(404).json({ error: 'Post not found' });
 
@@ -223,70 +307,12 @@ router.post('/:id/comments', async (req, res) => {
       text,
       parentComment: parentCommentId || null
     });
-
     await comment.save();
 
     post.commentsCount += 1;
     await post.save();
 
     req.io.emit('commentAdded', { postId, comment });
-
-    // Notification Logic
-    try {
-      const Notification = require('../models/Notification');
-      const User = require('../models/User');
-      
-      let recipientId = post.anonymousId;
-      let type = 'comment';
-      
-      if (parentCommentId) {
-        const parentComment = await Comment.findById(parentCommentId);
-        if (parentComment) {
-          recipientId = parentComment.anonymousId;
-          type = 'reply';
-        }
-      }
-
-      // Don't notify if the user is replying to themselves
-      if (recipientId !== anonymousId) {
-        const notification = new Notification({
-          recipientId,
-          senderNickname: nickname,
-          type,
-          postId,
-          commentId: comment._id
-        });
-        await notification.save();
-
-        const unreadCount = await Notification.countDocuments({ recipientId, isRead: false });
-
-        // Send Push Notification
-        const recipient = await User.findOne({ anonymousId: recipientId });
-        if (recipient && recipient.pushToken) {
-          fetch('https://exp.host/--/api/v2/push/send', {
-            method: 'POST',
-            headers: {
-              'Accept': 'application/json',
-              'Accept-encoding': 'gzip, deflate',
-              'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({
-              to: recipient.pushToken,
-              sound: 'default',
-              priority: 'high',
-              channelId: 'default',
-              badge: unreadCount,
-              title: 'Aaskitt Notification',
-              body: type === 'reply' ? `${nickname} replied: "${text}"` : `${nickname} commented: "${text}"`,
-              data: { postId: post._id },
-            }),
-          }).catch(err => console.error('Push notification error:', err));
-        }
-      }
-    } catch (notifErr) {
-      console.error('Error sending notification:', notifErr);
-    }
-
     res.status(201).json(comment);
   } catch (err) {
     res.status(500).json({ error: 'Server error' });
@@ -296,6 +322,12 @@ router.post('/:id/comments', async (req, res) => {
 // GET /api/posts/:id/comments
 router.get('/:id/comments', async (req, res) => {
   try {
+    const MessageComment = require('../models/MessageComment');
+    const commComments = await MessageComment.find({ messageId: req.params.id }).sort({ createdAt: 1 });
+    if (commComments && commComments.length > 0) {
+      return res.json(commComments);
+    }
+
     const comments = await Comment.find({ post: req.params.id }).sort({ createdAt: 1 });
     res.json(comments);
   } catch (err) {
@@ -307,8 +339,6 @@ router.get('/:id/comments', async (req, res) => {
 router.post('/:id/report', async (req, res) => {
   try {
     const post = await Post.findByIdAndUpdate(req.params.id, { status: 'reported' });
-    if (!post) return res.status(404).json({ error: 'Post not found' });
-    
     res.json({ message: 'Report submitted successfully' });
   } catch (err) {
     res.status(500).json({ error: 'Server error' });
@@ -319,8 +349,21 @@ router.post('/:id/report', async (req, res) => {
 router.delete('/:id', async (req, res) => {
   try {
     const { anonymousId } = req.body;
+
+    const CommunityMessage = require('../models/CommunityMessage');
+    const MessageComment = require('../models/MessageComment');
+    const msg = await CommunityMessage.findById(req.params.id);
+    if (msg) {
+      if (msg.anonymousId !== anonymousId) {
+        return res.status(403).json({ error: 'Not authorized to delete this post' });
+      }
+      await CommunityMessage.findByIdAndDelete(req.params.id);
+      await MessageComment.deleteMany({ messageId: req.params.id });
+      req.io.emit('postDeleted', req.params.id);
+      return res.json({ success: true });
+    }
+
     const post = await Post.findById(req.params.id);
-    
     if (!post) return res.status(404).json({ error: 'Post not found' });
     if (post.anonymousId !== anonymousId) {
       return res.status(403).json({ error: 'Not authorized to delete this post' });
@@ -328,9 +371,6 @@ router.delete('/:id', async (req, res) => {
 
     await Post.findByIdAndDelete(req.params.id);
     await Comment.deleteMany({ post: req.params.id });
-    const Notification = require('../models/Notification');
-    await Notification.deleteMany({ postId: req.params.id });
-
     req.io.emit('postDeleted', req.params.id);
     res.json({ success: true });
   } catch (err) {

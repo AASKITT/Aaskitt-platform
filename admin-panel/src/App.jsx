@@ -3,6 +3,7 @@ import AdminLayout from './components/AdminLayout';
 import Login from './pages/Login';
 import Dashboard from './pages/Dashboard';
 import Users from './pages/Users';
+import Sellers from './pages/Sellers';
 import Posts from './pages/Posts';
 import Groups from './pages/Groups';
 import GroupDetails from './pages/GroupDetails';
@@ -27,6 +28,7 @@ function App() {
         }>
           <Route path="dashboard" element={<Dashboard />} />
           <Route path="users" element={<Users />} />
+          <Route path="sellers" element={<Sellers />} />
           <Route path="posts" element={<Posts />} />
           <Route path="groups" element={<Groups />} />
           <Route path="groups/:id" element={<GroupDetails />} />

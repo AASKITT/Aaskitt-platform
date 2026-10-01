@@ -17,6 +17,11 @@ const groupSchema = new mongoose.Schema({
   bannedUsers:      { type: [String], default: [] },
   tags:             { type: [String], default: [] },   // mod-defined tags for posts
   dp:               { type: String, default: null },     // group display picture URL
+  location: {
+    type: { type: String, enum: ['Point'], default: 'Point' },
+    coordinates: { type: [Number], default: [78.4867, 17.3850] }
+  },
+  locationName:     { type: String, default: '' },
   createdAt:        { type: Date, default: Date.now }
 });
 

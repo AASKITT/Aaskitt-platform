@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { API_URL } from '../config';
 import StatsCard from '../components/StatsCard';
-import { Users, UserCheck, MessageSquare, Activity, MessageCircle, BarChart3, Wifi } from 'lucide-react';
+import { Users, UserCheck, MessageSquare, Activity, MessageCircle, BarChart3, Wifi, Store, ShieldAlert, Package } from 'lucide-react';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 
 export default function Dashboard() {
@@ -54,12 +54,12 @@ export default function Dashboard() {
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-5">
         <StatsCard title="Total Users" value={stats?.totalUsers || 0} icon={Users} colorClass="bg-blue-100 text-blue-600" />
         <StatsCard title="Google Accounts" value={stats?.googleUsersCount || 0} icon={UserCheck} colorClass="bg-sky-100 text-sky-600" />
-        <StatsCard title="Guest Users" value={stats?.guestUsersCount || 0} icon={Users} colorClass="bg-slate-100 text-slate-600" />
-        <StatsCard title="Active Today" value={stats?.activeUsersToday || 0} icon={Activity} colorClass="bg-emerald-100 text-emerald-600" />
+        <StatsCard title="Active Sellers" value={stats?.totalSellers || 0} icon={Store} colorClass="bg-emerald-100 text-emerald-600" />
+        <StatsCard title="Suspended Sellers" value={stats?.suspendedSellers || 0} icon={ShieldAlert} colorClass="bg-rose-100 text-rose-600" />
+        <StatsCard title="Marketplace Products" value={stats?.totalProducts || 0} icon={Package} colorClass="bg-indigo-100 text-indigo-600" />
         <StatsCard title="Total Posts" value={stats?.totalPosts || 0} icon={MessageSquare} colorClass="bg-purple-100 text-purple-600" />
-        <StatsCard title="Active Posts" value={stats?.activePosts || 0} icon={Activity} colorClass="bg-indigo-100 text-indigo-600" />
+        <StatsCard title="Active Posts" value={stats?.activePosts || 0} icon={Activity} colorClass="bg-teal-100 text-teal-600" />
         <StatsCard title="Total Comments" value={stats?.totalComments || 0} icon={MessageCircle} colorClass="bg-orange-100 text-orange-600" />
-        <StatsCard title="Posts Today" value={stats?.postsToday || 0} icon={BarChart3} colorClass="bg-pink-100 text-pink-600" />
       </div>
 
       <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100">

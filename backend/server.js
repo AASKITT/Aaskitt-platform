@@ -13,6 +13,7 @@ const configRoutes = require('./routes/configRoutes');
 const chatRoutes = require('./routes/chatRoutes');
 const communityRoutes = require('./routes/communityRoutes');
 const groupRoutes = require('./routes/groupRoutes');
+const productRoutes = require('./routes/productRoutes');
 
 const app = express();
 const server = http.createServer(app);
@@ -60,6 +61,7 @@ app.use('/api/config', configRoutes);
 app.use('/api/chats', chatRoutes);
 app.use('/api/community', communityRoutes);
 app.use('/api/groups', groupRoutes);
+app.use('/api/products', productRoutes);
 
 // Global 404 handler
 app.use((req, res) => {
@@ -115,9 +117,14 @@ io.on('connection', (socket) => {
   });
 });
 
+const migratePostsToNearbyGroup = require('./utils/migratePostsToNearby');
+
 // Database Connection
 mongoose.connect(process.env.MONGODB_URI)
-  .then(() => console.log('MongoDB connected'))
+  .then(() => {
+    console.log('MongoDB connected');
+    migratePostsToNearbyGroup().catch(err => console.error('Migration background error:', err));
+  })
   .catch(err => console.error('MongoDB connection error:', err));
 
 const PORT = process.env.PORT || 5000;
@@ -126,7 +133,7 @@ server.listen(PORT, () => {
 });
 
 // Prevent process from crashing on unhandled errors
-process.on('uncaughtException', (err) => {
+process.on('uncaughtException', (err) => {000
   console.error('Uncaught Exception:', err);
 });
 process.on('unhandledRejection', (reason) => {
