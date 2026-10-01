@@ -1,0 +1,36 @@
+# Dependencies
+node_modules/
+
+# Environment files
+.env
+.env*.local
+
+# Build artifacts & archives
+dist/
+web-build/
+*.zip
+*.tar.gz
+
+# Keystores & sensitive credentials
+*.jks
+*.keystore
+*.p8
+*.p12
+*.pem
+credentials.json
+*-firebase-adminsdk-*.json
+
+# Expo & Metro
+.expo/
+expo-env.d.ts
+.metro-health-check*
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# OS Files
+.DS_Store
+Thumbs.db
